@@ -227,4 +227,4 @@ class MLPFusion(nn.Module):
 
 # ------------------------- Test Script -------------------------
 if __name__ == '__main__':
-    {}
+    
