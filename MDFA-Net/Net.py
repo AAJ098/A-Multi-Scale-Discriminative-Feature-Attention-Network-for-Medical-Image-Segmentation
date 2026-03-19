@@ -12,11 +12,11 @@ from fvcore.nn import FlopCountAnalysis
 # ------------------------- MDFA-NET model -------------------------
 
 class FRA1(nn.Module):   #FRA1
-    def __init__(self, dim, norm_layer, act_layer):
+    def __init__(self, dim, norm_b, act_layer):
         super().__init__()
         self.p_conv = nn.Sequential(
             nn.Conv2d(dim, dim * 4, 1, bias=False),
-            norm_layer(dim * 4), #or BN
+            norm_b(dim * 4), #or BN
             act_layer(),
             nn.Conv2d(dim * 4, dim, 1, bias=False)
         )
@@ -42,7 +42,7 @@ class FRA2(nn.Module):   #FRA2
 
 
 class EEA(nn.Module):
-    def __init__(self, channel, att_kernel, norm_layer):
+    def __init__(self, channel, att_kernel, norm_layer,LG_attention):
         super().__init__()
         att_padding = att_kernel // 2
         self.gate_fn = nn.Sigmoid()
@@ -61,16 +61,19 @@ class EEA(nn.Module):
         self.V_att2 = nn.Conv2d(channel, channel, (3, att_kernel), 1, (1, att_padding),
                                 groups=channel, bias=False)
 
-        self.norm = norm_layer(channel)
+        self.norm = norm_layer(4 * channel)
+        self.fuse = nn.Conv2d(channel * 4, channel, kernel_size=1, bias=False)
 
     def forward(self, x):
-        x_tem = self.lg_attention(x_tem)
+        x_tem = self.lg_attention(x)
         x_tem = self.max_m2(x_tem)
         x_h1 = self.H_att1(x_tem)
         x_w1 = self.V_att1(x_tem)
         x_h2 = self.inv_h_transform(self.H_att2(self.h_transform(x_tem)))
         x_w2 = self.inv_v_transform(self.V_att2(self.v_transform(x_tem)))
-        att = self.norm(x_h1 + x_w1 + x_h2 + x_w2)
+        att = torch.cat([x_h1, x_w1, x_h2, x_w2], dim=1)
+        att = self.norm(att)
+        att = self.fuse(att)  
         att = self.max_m3(att)
         out = x[:, :self.channel, :, :] * F.interpolate(
             self.gate_fn(att), size=(x.shape[-2], x.shape[-1]), mode='nearest')
@@ -140,9 +143,9 @@ class ESA3(nn.Module):   #ESA1
         return x
 
 class ESA1(nn.Module):  #ESA2
-    def __init__(self, dim, act_layer):
+    def __init__(self, dim, act_layer,LW_attention):
         super().__init__()
-        self.lw_attention = lw_attention()
+        self.lw_attention = LW_attention()
         self.uppool = nn.MaxUnpool2d((2, 2), 2, padding=0)
 
         self.proj_1 = nn.Conv2d(dim, dim, 1)
@@ -179,17 +182,18 @@ class ESA1(nn.Module):  #ESA2
         return x
 
 class ESA2(nn.Module): 
-    def __init__(self, dim, norm_layer):
+    def __init__(self, dim, norm_,lw_attention):
         super().__init__()
-        self.norm = norm_layer(dim)
+        self.norm = norm_(dim)
         self.attn = ESA3(dim)
-        self.downpool = nn.MaxPool2d(kernel_size=3, stride=3, return_indices=True)
+        self.lw_attention = lw_attention()
         self.uppool = nn.MaxUnpool2d((3, 3), 3, padding=0)
 
-    def forward(self, x):
-        x_, idx = self.downpool(x)
+    def forward(self, x, x_i):
+        x_, idx = self.lw_attention(x)
         x = x_ * self.norm(self.attn(x_))
         x = self.uppool(x, indices=idx)
+        x = x + x_i
         return x
 
 class DynamicChannelSplit(nn.Module):
@@ -197,7 +201,7 @@ class DynamicChannelSplit(nn.Module):
         super().__init__()
         if hidden is None:
             hidden = max(4, channels // 4)
-        self.pool = nn.AdaptiveAvgPool2d(1)
+        self.pool = nn.AdaptiveMaxPool2d(1)
         self.fc = nn.Sequential(
             nn.Conv2d(channels, hidden, kernel_size=1, bias=False),
             nn.GELU(),
@@ -227,4 +231,4 @@ class MLPFusion(nn.Module):
 
 # ------------------------- Test Script -------------------------
 if __name__ == '__main__':
-    
+
